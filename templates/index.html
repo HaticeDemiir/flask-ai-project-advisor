@@ -1,0 +1,231 @@
+<script type="text/javascript">
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+      return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
+    if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+        try {
+            var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+            var firstSheetName = workbook.SheetNames[0];
+            var worksheet = workbook.Sheets[firstSheetName];
+            var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+            var filteredData = jsonData.filter(row => row.some(filledCell));
+            var headerRowIndex = filteredData.findIndex((row, index) =>
+              row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+            );
+            if (headerRowIndex === -1 || headerRowIndex > 25) {
+              headerRowIndex = 0;
+            }
+            var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+            csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+            return csv;
+        } catch (e) {
+            console.error('XLSX processing error:', e);
+            return "";
+        }
+    }
+    return gk_fileData[filename] || "";
+    }
+</script>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Project Advisor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar sidebar-hidden">
+      <button class="sidebar-toggle" onclick="toggleSidebar()">
+        <span class="arrow arrow-left">←</span>
+        <span class="arrow arrow-right">→</span>
+      </button>
+      <div class="sidebar-content">
+        <h3>Workspaces</h3>
+        <button class="new-project-btn" onclick="newProject()">New Project</button>
+        <h3>Saved Analyses</h3>
+        <ul id="pdfList"></ul>
+      </div>
+    </div>
+    <div class="main-content main-content-expanded">
+      <h1>Project Advisor</h1>
+      <div class="input-section">
+        <input type="file" id="projectFile" accept=".txt,.pdf,.docx,.xlsx">
+        <button onclick="analyzeProject()">Analyze Document</button>
+      </div>
+      <div id="analysisResult"></div>
+      <iframe id="pdfViewer" style="display: none; width: 100%; height: 600px; border: none;"></iframe>
+      <div id="loading" class="loading-hidden">
+        <div class="loader"></div><span>Analyzing...</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    mermaid.initialize({ startOnLoad: false });
+
+    function toggleSidebar() {
+      console.log('Toggling sidebar');
+      const sidebar = document.querySelector('.sidebar');
+      const mainContent = document.querySelector('.main-content');
+      if (sidebar && mainContent) {
+        sidebar.classList.toggle('sidebar-hidden');
+        mainContent.classList.toggle('main-content-expanded');
+      } else {
+        console.error('Sidebar or main content not found');
+      }
+    }
+
+    function newProject() {
+      const resultDiv = document.getElementById('analysisResult');
+      const fileInput = document.getElementById('projectFile');
+      const inputSection = document.querySelector('.input-section');
+      const pdfViewer = document.getElementById('pdfViewer');
+      if (resultDiv && fileInput && inputSection && pdfViewer) {
+        resultDiv.innerHTML = '';
+        fileInput.value = '';
+        inputSection.style.display = 'flex';
+        pdfViewer.style.display = 'none';
+      } else {
+        console.error('Required elements not found for new project');
+      }
+    }
+
+    function loadPdfList() {
+      fetch('/list_pdfs')
+        .then(response => response.json())
+        .then(pdfs => {
+          const pdfList = document.getElementById('pdfList');
+          pdfList.innerHTML = '';
+          pdfs.forEach(pdf => {
+            const li = document.createElement('li');
+            li.innerHTML = `<a href="#" onclick="viewPdf('${pdf.pdf_path}')">${pdf.filename} (${new Date(pdf.upload_time).toLocaleString()})</a>`;
+            pdfList.appendChild(li);
+          });
+        })
+        .catch(err => console.error('Error loading PDF list:', err));
+    }
+
+    function viewPdf(pdfPath) {
+      const pdfViewer = document.getElementById('pdfViewer');
+      const analysisResult = document.getElementById('analysisResult');
+      const inputSection = document.querySelector('.input-section');
+      if (pdfViewer && analysisResult && inputSection) {
+        pdfViewer.src = `/pdfs/${pdfPath}`;
+        pdfViewer.style.display = 'block';
+        analysisResult.innerHTML = '';
+        inputSection.style.display = 'none';
+      }
+    }
+
+    function analyzeProject() {
+      const fileInput = document.getElementById('projectFile');
+      const resultDiv = document.getElementById('analysisResult');
+      const loader = document.getElementById('loading');
+      const pdfViewer = document.getElementById('pdfViewer');
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert('Please select a file');
+        return;
+      }
+
+      const maxSize = 25 * 1024 * 1024;
+      if (file.size > maxSize) {
+        alert('File size exceeds 25 MB limit');
+        return;
+      }
+
+      const allowedTypes = ['text/plain', 'application/pdf', 
+                          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+      if (!allowedTypes.includes(file.type)) {
+        alert('Unsupported file type. Allowed: TXT, PDF, DOCX, XLSX');
+        return;
+      }
+
+      resultDiv.innerHTML = '';
+      pdfViewer.style.display = 'none';
+      loader.classList.replace('loading-hidden', 'loading-visible');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      fetch('/analyze', {
+        method: 'POST',
+        body: formData
+      })
+      .then(r => r.json())
+      .then(data => {
+        loader.classList.replace('loading-visible', 'loading-hidden');
+        if (data.error) {
+          resultDiv.innerHTML = `<div class="error">${data.error}</div>`;
+          return;
+        }
+
+        let html = `<div class="section"><h2>Project Overview</h2>`;
+        html += data.overview.map(p => `<p>${p}</p>`).join('');
+        html += `</div>`;
+
+        html += `<div class="section"><h2>Requirements Analysis</h2>`;
+        html += `<div class="requirement-category business"><h3>Business Requirements</h3><ol>`;
+        html += data.requirements.business.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div>`;
+
+        html += `<div class="requirement-category functional"><h3>Functional Requirements</h3><ol>`;
+        html += data.requirements.functional.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div>`;
+
+        html += `<div class="requirement-category non-functional"><h3>Non-Functional Requirements</h3><ol>`;
+        html += data.requirements.non_functional.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div>`;
+
+        html += `<div class="requirement-category technical"><h3>Technical Requirements</h3><ol>`;
+        html += data.requirements.technical.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div></div>`;
+
+        html += `<div class="section"><h2>Analysis</h2>`;
+        html += `<div class="analysis-category functional"><h3>Functional Analysis</h3><ol>`;
+        html += data.analysis.functional.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div>`;
+
+        html += `<div class="analysis-category technical"><h3>Technical Analysis</h3><ol>`;
+        html += data.analysis.technical.map(r => `<li>${r}</li>`).join('');
+        html += `</ol></div>`;
+
+        html += `<div class="analysis-category impact"><h3>Impact Analysis</h3>`;
+        html += data.analysis.impact.map(p => `<p>${p}</p>`).join('');
+        html += `</div></div>`;
+
+        html += `<div class="section"><h2>UML Diagrams</h2>`;
+
+        let diagramCount = 0;
+        data.uml.split('```').forEach((blk, i) => {
+          if (blk.includes('mermaid')) {
+            const code = blk.replace('mermaid', '').trim();
+            html += `<div class="diagram"><h4>Diagram ${++diagramCount}</h4><div class="mermaid">${code}</div></div>`;
+          } else if (blk.trim() && !blk.includes('mermaid')) {
+            html += `<p>${blk.trim()}</p>`;
+          }
+        });
+        html += `</div>`;
+
+        resultDiv.innerHTML = html;
+        mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+        loadPdfList();
+      })
+      .catch(err => {
+        loader.classList.replace('loading-visible', 'loading-hidden');
+        resultDiv.innerHTML = `<div class="error">Connection error: ${err.message}</div>`;
+        console.error('Fetch error:', err);
+      });
+    }
+
+    window.onload = loadPdfList;
+  </script>
+</body>
+</html>

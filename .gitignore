@@ -1,0 +1,25 @@
+# env
+.env
+.env.*
+
+# python
+__pycache__/
+*.pyc
+
+# virtual env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# database
+*.db
+
+# uploads & generated
+uploads/
+static/pdfs/
